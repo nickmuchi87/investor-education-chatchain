@@ -1,7 +1,7 @@
 from langchain.prompts.prompt import PromptTemplate
 from langchain.llms import OpenAI
 from langchain.chains import ChatVectorDBChain
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.embeddings import HuggingFaceEmbeddings, HuggingFaceInstructEmbeddings
 from langchain.vectorstores import FAISS
 import os
 from typing import Optional, Tuple
@@ -9,18 +9,37 @@ import gradio as gr
 import pickle
 from threading import Lock
 
-model_sbert = "sentence-transformers/all-mpnet-base-v2"
+model_options = {'all-mpnet-base-v2': "sentence-transformers/all-mpnet-base-v2",
+                'instructor-base': "hkunlp/instructor-base"}
 
+model_options_list = list(model_options.keys())
 
-sbert_emb = HuggingFaceEmbeddings(model_name=model_sbert)
+def load_vectorstore(model):
+    '''load embeddings and vectorstore'''
 
-def load_vectorstore(folder,embeddings):
+    if 'mpnet' in model:
+        
+        emb = HuggingFaceEmbeddings(model_name=model)
+        print(emb)
+        return FAISS.load_local('vanguard-embeddings', emb)
+
+    elif 'instructor'in model:
+        
+        emb = HuggingFaceInstructEmbeddings(model_name=model,
+                                               query_instruction='Represent the Financial question for retrieving supporting paragraphs: ',
+                                               embed_instruction='Represent the Financial paragraph for retrieval: ')
+        print(emb)
+        return FAISS.load_local('vanguard_embeddings_inst', emb)
+
+#default embeddings
+vectorstore = load_vectorstore(model_options['all-mpnet-base-v2'])
+
+def on_value_change(change):
+    '''When radio changes, change the embeddings'''
+    global vectorstore
+    vectorstore = load_vectorstore(model_options[change])
     
-    vectorstore = FAISS.load_local(folder,embeddings) 
-
-    return vectorstore
-
-vectorstore = load_vectorstore('vanguard-embeddings',sbert_emb)
+# vectorstore = load_vectorstore('vanguard-embeddings',sbert_emb)
     
 _template = """Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question.
 You can assume the question about investing and the investment management industry.
@@ -104,6 +123,15 @@ with block:
             type="password",
         )
 
+    with gr.Row():
+        embeddings = gr.Radio(choices=model_options_list,value=model_options_list[0], label='Choose your Embedding Model',
+                             interactive=True)
+        embeddings.change(on_value_change, embeddings)
+    
+    vectorstore = load_vectorstore(embeddings.value)
+
+    print(vectorstore)
+
     chatbot = gr.Chatbot()
 
     with gr.Row():
@@ -133,6 +161,7 @@ with block:
     state = gr.State()
     agent_state = gr.State()
 
+    
     submit.click(chat, inputs=[openai_api_key_textbox, message, state, agent_state], outputs=[chatbot, state])
     message.submit(chat, inputs=[openai_api_key_textbox, message, state, agent_state], outputs=[chatbot, state])
 
